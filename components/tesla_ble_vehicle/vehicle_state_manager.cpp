@@ -9,6 +9,12 @@ namespace tesla_ble_vehicle {
 
 VehicleStateManager::VehicleStateManager(TeslaBLEVehicle* parent)
     : parent_(parent), is_charging_(false), charging_amps_max_(32) {}
+    
+void VehicleStateManager::republish_charging_state() {
+    if (charging_switch_) {
+        publish_sensor_state(charging_switch_, is_charging_);
+    }
+}
 
 void VehicleStateManager::update_vehicle_status(const VCSEC_VehicleStatus& status) {
     ESP_LOGD(STATE_MANAGER_TAG, "Updating vehicle status");

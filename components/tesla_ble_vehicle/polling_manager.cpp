@@ -147,6 +147,9 @@ bool PollingManager::should_poll_infotainment() {
         return false;
     }
 
+    // Disregard the wake window as it will eventually block polling, even when the vehicle is awake
+    
+    /*
     // If not charging, check if we're within the wake window
     uint32_t time_since_wake = time_since(wake_time_);
     if (time_since_wake >= infotainment_sleep_timeout_) {
@@ -154,6 +157,7 @@ bool PollingManager::should_poll_infotainment() {
                  time_since_wake, infotainment_sleep_timeout_);
         return false;
     }
+    */
 
     // We're within the wake window, poll at awake interval
     if (has_elapsed(last_infotainment_poll_, infotainment_poll_interval_awake_)) {

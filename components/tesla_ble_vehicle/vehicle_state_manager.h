@@ -86,6 +86,7 @@ public:
     // Command tracking for INFOTAINMENT request delay
     void track_command_issued();
     bool should_delay_infotainment_request() const;
+    void republish_charging_state(); // publish current is_charging_ to HA
     
 private:
     TeslaBLEVehicle* parent_;
