@@ -192,9 +192,9 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
     }
 
     // Update charging amps (from charger actual current)
-    if (charge_state.which_optional_charger_actual_current && charging_amps_number_) {
-        float amps = static_cast<float>(charge_state.optional_charger_actual_current.charger_actual_current);
-        // update_charging_amps(amps);
+    if (charge_state.optional_charge_current_request && charging_amps_number_) {
+        float amps = static_cast<float>(charge_state.optional_charge_current_request.charge_current_request);
+        update_charging_amps(amps);
     }
     
     // Update charge limit - update both sensor (read-only) and number (user-controllable)
@@ -285,8 +285,7 @@ void VehicleStateManager::update_charge_flap_open(bool open) {
 }
 
 void VehicleStateManager::update_charging_amps(float amps) {
-    ESP_LOGV(STATE_MANAGER_TAG, "Charging amps from vehicle: %.1f A", amps);
-    
+    ESP_LOGV(STATE_MANAGER_TAG, "Charging amps setpoint from vehicle: %.1f A", amps);
     // Always update the number component (since we're using delay-based approach)
     publish_sensor_state(charging_amps_number_, amps);
 }
