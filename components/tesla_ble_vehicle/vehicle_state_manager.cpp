@@ -194,7 +194,7 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
     // Update charging amps (from charger actual current)
     if (charge_state.which_optional_charger_actual_current && charging_amps_number_) {
         float amps = static_cast<float>(charge_state.optional_charger_actual_current.charger_actual_current);
-        update_charging_amps(amps);
+        // update_charging_amps(amps);
     }
     
     // Update charge limit - update both sensor (read-only) and number (user-controllable)
