@@ -128,6 +128,11 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
         float calculated_power_w = 0.0f;
         bool has_calculated_power = false;
         
+        // Try to pick up charger number of phases, default is 1 phase
+        if (charge_state.which_optional_charger_phases) {
+            charger_phases = charge_state.optional_charger_phases.charger_phases;
+        }
+        
         // Try to calculate power from voltage × current for better precision
         if (charge_state.which_optional_charger_voltage && charge_state.which_optional_charger_actual_current) {
             float voltage = static_cast<float>(charge_state.optional_charger_voltage.charger_voltage);
@@ -135,6 +140,9 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
 
             // Calculate power in watts (voltage * current)
             calculated_power_w = (voltage * current);
+            if (charger_phases > 1) {
+               calculated_power_w *= 1.732; 
+            }
             has_calculated_power = true;
 
             ESP_LOGD(STATE_MANAGER_TAG, "Calculated charger power: %.1fV × %.1fA = %.0fW", voltage, current, calculated_power_w);
