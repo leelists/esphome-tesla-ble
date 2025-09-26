@@ -48,7 +48,6 @@ void PollingManager::update() {
         std::string reason = get_fast_poll_reason();
         log_polling_decision("Infotainment data poll", reason);
         request_infotainment_poll();
-        last_infotainment_poll_ = now;
     }
 }
 
@@ -94,7 +93,6 @@ void PollingManager::update_vehicle_state(bool is_awake, bool is_charging, bool 
             wake_time_ = millis();
             ESP_LOGI(POLLING_MANAGER_TAG, "Vehicle just woke up - tracking wake time and requesting immediate infotainment poll");
             request_infotainment_poll(true);  // true = bypass delay
-            last_infotainment_poll_ = millis();
             // Cancel pending initial infotainment poll since we're doing it now due to wake
             pending_initial_infotainment_poll_ = false;
         }
@@ -118,7 +116,6 @@ void PollingManager::force_immediate_poll() {
     // Force infotainment poll if awake
     if (was_awake_) {
         request_infotainment_poll();
-        last_infotainment_poll_ = now;
     }
 }
 
@@ -235,6 +232,7 @@ void PollingManager::request_infotainment_poll(bool bypass_delay) {
     }
     
     command_manager->enqueue_infotainment_poll();
+    last_infotainment_poll_ = millis();
 }
 
 void PollingManager::request_wake_and_poll() {
