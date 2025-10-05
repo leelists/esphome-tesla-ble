@@ -229,11 +229,12 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
         // Skip update if new_max is 0 or invalid - likely not ready or invalid value from vehicle
         if (new_max <= 0) {
             ESP_LOGV(STATE_MANAGER_TAG, "Skipping max charging amps update - invalid value from vehicle: %d A", new_max);
-        } else if (new_max != charging_amps_max_) {
-            update_charging_amps_max(new_max);
-        } else {
-            ESP_LOGV(STATE_MANAGER_TAG, "Max charging amps unchanged: %d A", new_max);
-        }
+        // We don't trust the stored charging_amps_max_
+        } else //if (new_max != charging_amps_max_) {
+            update_charging_amps_max(new_max); // Will be validated by update...()
+        //} else {
+        //    ESP_LOGV(STATE_MANAGER_TAG, "Max charging amps unchanged: %d A", new_max);
+        //}
     } else {
         ESP_LOGV(STATE_MANAGER_TAG, "No max charging amps data in charge state");
     }
@@ -363,9 +364,11 @@ void VehicleStateManager::update_charging_amps_max(int32_t new_max) {
     charging_amps_max_ = new_max;
     
     // Update the number component's maximum value via the parent (which knows about Tesla types)
-    if (charging_amps_number_ && old_max != new_max) {
-        auto old_trait_max = charging_amps_number_->traits.get_max_value();
-        
+    // We don't trust the old_max value so get it fresh
+    auto old_trait_max = charging_amps_number_->traits.get_max_value();
+    // if (charging_amps_number_ && old_max != new_max) {
+    if (charging_amps_number_ && old_trait_max != new_max) {
+        // auto old_trait_max = charging_amps_number_->traits.get_max_value();
         // Ask the parent to update the max value since it knows about Tesla-specific types
         if (parent_) {
             parent_->update_charging_amps_max_value(new_max);
