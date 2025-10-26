@@ -1,9 +1,359 @@
+substitutions:
+  # all substitutions for this project
+  espidf_version: latest
+  friendly_name: Tesla BLE
+  board: esp32dev
+  variant: esp32
+  flash_size: 4MB
+  version: 2025.10.1
+  charging_amps_max: "16"
+  charging_limit_solar_max: "80"
+
 external_components: !include packages/external_components.yml
 
 packages:
   base: !include packages/base.yml
   device_base: !include boards/esp32-generic.yml
   client: !include packages/client.yml
+    #  listener: !include packages/listener.yml
+
+time:
+  - platform: homeassistant
+    id: hatime
+    timezone: Europe/Paris
+    on_time:
+      - seconds: 0
+        minutes: 0
+        hours: 6
+        then:
+          - switch.turn_on: ble_connection_switch
+          - wait_until:
+              condition:
+                lambda: |-
+                  auto *manager = id(tesla_ble_vehicle_id).get_state_manager();
+                  return manager != nullptr && manager->is_charge_flap_open();
+              timeout: 180s
+          - if:
+              condition:
+                lambda: |-
+                  auto *manager = id(tesla_ble_vehicle_id).get_state_manager();
+                  return manager != nullptr && manager->is_charging();
+              then:
+                - logger.log: "Stop charging"
+                - tesla_ble_vehicle.set_charging:
+                    id: tesla_ble_vehicle_id
+                    state: false
+
+number:
+  - platform: template
+    id: charging_limit_solar_max_number
+    name: "Max Solar Charging Limit"
+    min_value: 50
+    max_value: 100
+    step: 5
+    mode: slider
+    entity_category: config
+    restore_value: true
+    initial_value: ${charging_limit_solar_max}
+    optimistic: true
+
+switch:
+  - platform: template
+    id: auto_charge_switch
+    name: "Charge automatique"
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_ON
+    optimistic: true
+
+text_sensor:
+  - platform: homeassistant
+    id: sun_state
+    entity_id: sun.sun
+    on_value:
+      then:
+        - if:
+            condition:
+              lambda: |-
+                return x == "above_horizon";
+            then:
+              - switch.turn_on: ble_connection_switch
+            else:
+              - lambda: |-
+                  id(tesla_ble_vehicle_id).set_charging_state(false);
+                  id(tesla_ble_vehicle_id).set_charging_amps(${charging_limit_solar_max});
+
+              - delay: 60s
+              - switch.turn_off: ble_connection_switch
+
+sensor:
+  - platform: homeassistant
+    id: inverter_gen_power
+    entity_id: sensor.inverter_gen_power  # kW
+
+  - platform: homeassistant
+    id: inverter_charge_dis_power
+    entity_id: sensor.inverter_charge_dis_power # kW
+
+  - platform: homeassistant
+    id: inverter_grid_power
+    entity_id: sensor.inverter_grid_power # kW
+
+  - platform: homeassistant
+    id: inverter_load_power
+    entity_id: sensor.inverter_load_power # kW
+
+  - platform: homeassistant
+    id: inverter_grid_voltage
+    entity_id: sensor.inverter_grid_voltage # V
+
+  - platform: homeassistant
+    id: home_battery_soc
+    entity_id: sensor.battery_soc # %
+    on_value:
+      then:
+        lambda: |-
+          if (id(home_battery_soc).has_state()) {
+             const float home_battery_pct = id(home_battery_soc).state;
+             if (!isnan(home_battery_pct)) {
+               ESP_LOGI("homebat", "Batterie maison %.1f%%", home_battery_pct);
+             }
+          }
+
+  # --- excess_solar_power (exposé) ---
+  - platform: template
+    id: excess_solar_power
+    name: "Excess Solar Power"
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+    update_interval: 20s
+    lambda: |-
+      const float gen  = id(inverter_gen_power).state;
+      const float load = id(inverter_load_power).state;
+      const float grid = id(inverter_grid_power).state;
+      const float batt = id(inverter_charge_dis_power).state;
+      float charge_power = 0.0f;
+
+      const float volt = id(inverter_grid_voltage).state;
+      auto *manager = id(tesla_ble_vehicle_id).get_state_manager();
+      if (!isnan(volt) && manager != nullptr && manager->is_charging()) {
+        const float amps = manager->get_charging_amps();
+        if (!isnan(amps)) {
+            charge_power = volt * amps * 0.97f;
+        }
+      }
+
+      if (isnan(gen) || isnan(load) || isnan(grid) || isnan(batt) || isnan(charge_power)) return NAN;
+
+      float excess = (gen - load) * 1000.0f + charge_power;
+      if (excess < 0.0f) {
+        excess = 0.0f;
+      }
+
+      ESP_LOGI("excess_solar_power",
+        "gen=%.1f load=%.1f grid=%.1f batt=%.1f charge=%.1f excess=%.1f",
+        gen*1000.0f, load*1000.0f, grid*1000.0f, batt*1000.0f, charge_power, excess);
+
+      return excess;
+
+    on_value:
+      then:
+      - lambda: |-
+          static const char *const TAG = "solar_charge_control";
+          static int last_limit_command = -1;
+          static int start_condition_valid_count = 0;
+          auto *manager = id(tesla_ble_vehicle_id).get_state_manager();
+
+          if (!id(auto_charge_switch).state) {
+            ESP_LOGI(TAG, "Contrôle de charge désactivé");
+            return;
+          }
+
+          auto *charging_limit_number = id(tesla_charging_limit_number);
+          const auto reset_last_limit_command = [&]() {
+            if (charging_limit_number == nullptr || !charging_limit_number->has_state()) {
+              return;
+            }
+            const float limit_state = charging_limit_number->state;
+            if (isnan(limit_state)) {
+              return;
+            }
+            const int current_limit_int = static_cast<int>(limit_state);
+            if (last_limit_command != -1 && current_limit_int >= last_limit_command) {
+              last_limit_command = -1;
+            }
+          };
+          reset_last_limit_command();
+
+          auto *sun = id(sun_state);
+          const bool sun_below_horizon = sun != nullptr && sun->has_state() && sun->state == "below_horizon";
+          if (sun_below_horizon) {
+            ESP_LOGI(TAG, "Soleil sous l'horizon, contrôle de charge suspendu");
+            start_condition_valid_count = 0;
+            return;
+          }
+
+          const bool charger_connected = id(tesla_charger_sensor).state;
+          const float excess_power_w = id(excess_solar_power).state;
+          const float grid_voltage_v = id(inverter_grid_voltage).state;
+
+          const bool has_power_data = charger_connected && !isnan(excess_power_w) && !isnan(grid_voltage_v) && grid_voltage_v > 0.0f;
+          float available_amps = NAN;
+          if (has_power_data) {
+            available_amps = excess_power_w / grid_voltage_v;
+          }
+
+          auto *home_battery_sensor = id(home_battery_soc);
+          float home_battery_pct = NAN;
+          bool home_battery_valid = false;
+          if (home_battery_sensor != nullptr && home_battery_sensor->has_state()) {
+            home_battery_pct = home_battery_sensor->state;
+            home_battery_valid = !isnan(home_battery_pct);
+          }
+
+          const bool home_battery_low = home_battery_valid && home_battery_pct < 20.0f;
+          const bool home_battery_high = home_battery_valid && home_battery_pct > 80.0f;
+          const bool home_battery_balanced = home_battery_valid && home_battery_pct >= 20.0f && home_battery_pct <= 50.0f;
+
+          float start_threshold = 6.8f;
+          float sustain_threshold = 4.0f;
+          float min_target_amps = 4.0f;
+          float target_ratio = 1.0f;
+
+          if (home_battery_high) {
+            start_threshold = 4.5f;
+            sustain_threshold = 3.0f;
+            available_amps += 1.0f; // drain some battery
+          } else if (home_battery_balanced) {
+            target_ratio = 4.0f / 5.0f;
+          }
+
+          const bool can_start_charge = has_power_data && available_amps * target_ratio >= start_threshold;
+          const bool can_sustain_charge = has_power_data && available_amps * target_ratio >= sustain_threshold;
+
+          const bool manager_ready = manager != nullptr;
+          const bool is_charging = manager_ready && manager->is_charging();
+
+          if (home_battery_low && home_battery_valid) {
+            if (is_charging) {
+              ESP_LOGI(TAG, "Priorité maison (%.1f%% < 20%%), arrêt de la charge véhicule", home_battery_pct);
+              id(tesla_ble_vehicle_id).set_charging_state(false);
+            } else {
+              ESP_LOGI(TAG, "Priorité maison (%.1f%% < 20%%), charge véhicule non démarrée", home_battery_pct);
+            }
+            start_condition_valid_count = 0;
+            return;
+          }
+
+          if (!is_charging) {
+            if (!can_start_charge) {
+              start_condition_valid_count = 0;
+              if (home_battery_valid && has_power_data) {
+                ESP_LOGI(TAG, "Batterie maison %.1f%%, excédent solaire insuffisant (%.1fA < %.1fA) pour démarrer la charge véhicule", home_battery_pct, available_amps, start_threshold);
+              }
+              return;
+            }
+            constexpr int required_start_iterations = 3;
+            start_condition_valid_count++;
+            if (start_condition_valid_count < required_start_iterations) {
+              ESP_LOGI(TAG, "Excédent solaire suffisant (%d/%d cycles), attente avant démarrage", start_condition_valid_count, required_start_iterations);
+              return;
+            }
+            start_condition_valid_count = 0;
+            ESP_LOGI(TAG, "Excédent solaire suffisant (%.1fA >= %.1fA) et chargeur branché : démarrage de la charge", available_amps, start_threshold);
+            id(tesla_ble_vehicle_id).set_charging_state(true);
+            id(tesla_ble_vehicle_id).set_charging_amps(min_target_amps);
+            return;
+          }
+
+          if (is_charging && !isnan(available_amps)) {
+            if (!can_sustain_charge) {
+              ESP_LOGI(TAG, "Excédent solaire retombé (%.1fA < %.1fA) : arrêt de la charge", available_amps, sustain_threshold);
+              id(tesla_ble_vehicle_id).set_charging_state(false);
+              return;
+            }
+
+            const auto clamp_target_amps = [&](float value) {
+              float adjusted = value * target_ratio;
+              if (adjusted < min_target_amps) {
+                adjusted = min_target_amps;
+              }
+              if (adjusted > 16.0f) {
+                adjusted = 16.0f;
+              }
+              return std::floor(adjusted);
+            };
+
+            const float target_amps = clamp_target_amps(available_amps);
+            const float current_amps = manager_ready ? manager->get_charging_amps() : NAN;
+            const float delta = isnan(current_amps) ? 10.0f : fabsf(current_amps - target_amps);
+            const int target_amps_int = static_cast<int>(target_amps);
+
+            if (delta >= 0.5f) {
+              ESP_LOGI(TAG, "Ajustement intensité de charge vers %dA (disponible=%.1fA)", target_amps_int, available_amps);
+              id(tesla_ble_vehicle_id).set_charging_amps(target_amps_int);
+            }
+
+            const auto maybe_raise_charge_limit = [&]() {
+              if (available_amps < min_target_amps || charging_limit_number == nullptr || !charging_limit_number->has_state()) {
+                return;
+              }
+
+              const float limit_state = charging_limit_number->state;
+              if (isnan(limit_state)) {
+                return;
+              }
+
+              auto *vehicle_battery_sensor = id(tesla_battery_level_sensor);
+              if (vehicle_battery_sensor == nullptr || !vehicle_battery_sensor->has_state()) {
+                return;
+              }
+
+              const float battery_pct = vehicle_battery_sensor->state;
+              if (isnan(battery_pct)) {
+                return;
+              }
+
+              const int limit_int = static_cast<int>(limit_state);
+              int limit_max = ${charging_limit_solar_max};
+              auto *limit_max_number = id(charging_limit_solar_max_number);
+              if (limit_max_number != nullptr && limit_max_number->has_state()) {
+                limit_max = static_cast<int>(limit_max_number->state);
+              }
+
+              if (limit_int >= limit_max || battery_pct < (limit_state - 1.0f)) {
+                return;
+              }
+
+              const int target_limit = limit_int + 1;
+              if (last_limit_command == target_limit) {
+                return;
+              }
+
+              ESP_LOGI(TAG, "Batterie %.1f%% proche de la limite %.1f%%, augmentation vers %d%%", battery_pct, limit_state, target_limit);
+              id(tesla_ble_vehicle_id).set_charging_limit(target_limit);
+              last_limit_command = target_limit;
+            };
+            maybe_raise_charge_limit();
+            return;
+          }
+
+          if (is_charging && !can_sustain_charge) {
+            ESP_LOGI(TAG, "Pas assez d'excédent solaire ou chargeur débranché : arrêt de la charge");
+            id(tesla_ble_vehicle_id).set_charging_state(false);
+          }
+
+
+# inverter_gen_power - inverter_charge_dis_power - inverter_grid_power
+#10.0
+#-930.0
+#-650.0
+# 30000 - 930
+# SolarGen: {{ states.sensor.inverter_gen_power.state | float * 1000 }}
+# Charge: {{ states.sensor.inverter_charge_dis_power.state | float * 1000 }}
+# Grid: {{ states.sensor.inverter_grid_power.state | float * 1000 }}
+# Load: {{ states.sensor.inverter_load_power.state | float * 1000 }}
+# si inverter_charge_dis_power < 0 => excess = 0
 
 dashboard_import:
-  package_import_url: github://slandroe/esphome-tesla-ble/tesla-ble-esp32-generic.dashboard.yml
+  package_import_url: github://leelists/esphome-tesla-ble/tesla-ble-esp32-generic.dashboard.yml

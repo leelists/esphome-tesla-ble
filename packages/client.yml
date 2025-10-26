@@ -40,5 +40,6 @@ sensor:
 switch:
   - platform: ble_client
     ble_client_id: ble_tesla_id
+    id: ble_connection_switch
     name: "BLE Connection"
     entity_category: diagnostic

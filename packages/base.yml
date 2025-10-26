@@ -7,7 +7,7 @@ packages:
   board: !include board.yml
   common: !include common.yml
   project: !include project.yml
-  # listener: !include listener.yml # Uncomment this to scan find your VIN BLE MAC address
+    #  listener: !include listener.yml # Uncomment this to scan find your VIN BLE MAC address
 
 esphome:
   name: ${device_name}
@@ -16,7 +16,7 @@ esphome:
   comment: ${device_description}
   project:
     name: yoziru.esphome-tesla-ble
-    version: "2025.8.17"
+    version: ${version}
   libraries:
     - tesla-ble=https://github.com/alexlenk/tesla-ble.git#main
 

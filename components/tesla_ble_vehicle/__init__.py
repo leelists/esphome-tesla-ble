@@ -51,6 +51,10 @@ SetChargingLimitAction = tesla_ble_vehicle_ns.class_("SetChargingLimitAction", a
 CONF_VIN = "vin"
 CONF_CHARGING_AMPS_MAX = "charging_amps_max"
 CONF_ROLE = "role"
+CONF_CHARGING_LIMIT_NUMBER_ID = "charging_limit_number_id"
+CONF_BATTERY_LEVEL_SENSOR_ID = "battery_level_sensor_id"
+CONF_CHARGER_SENSOR_ID = "charger_sensor_id"
+CONF_CHARGER_POWER_SENSOR_ID = "charger_power_sensor_id"
 
 # Polling configuration constants
 CONF_VCSEC_POLL_INTERVAL = "vcsec_poll_interval"
@@ -79,6 +83,10 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_INFOTAINMENT_POLL_INTERVAL_AWAKE, default=30): cv.int_range(min=10, max=600), 
             cv.Optional(CONF_INFOTAINMENT_POLL_INTERVAL_ACTIVE, default=10): cv.int_range(min=5, max=120),
             cv.Optional(CONF_INFOTAINMENT_SLEEP_TIMEOUT, default=660): cv.int_range(min=60, max=3600),  # 11 minutes default
+            cv.Optional(CONF_CHARGING_LIMIT_NUMBER_ID, default="tesla_charging_limit_number"): cv.declare_id(TeslaChargingLimitNumber),
+            cv.Optional(CONF_BATTERY_LEVEL_SENSOR_ID, default="tesla_battery_level_sensor"): cv.declare_id(sensor.Sensor),
+            cv.Optional(CONF_CHARGER_SENSOR_ID, default="tesla_charger_sensor"): cv.declare_id(binary_sensor.BinarySensor),
+            cv.Optional(CONF_CHARGER_POWER_SENSOR_ID, default="tesla_charger_power_sensor"): cv.declare_id(sensor.Sensor),
         },
     )
     .extend(cv.polling_component_schema("10s"))  # Default matches VCSEC polling interval
@@ -151,7 +159,7 @@ async def to_code(config):
     cg.add(var.set_binary_sensor_is_charge_flap_open(charge_flap_sensor))
 
     charger_sensor = await binary_sensor.new_binary_sensor({
-        CONF_ID: cv.declare_id(binary_sensor.BinarySensor)("tesla_charger_sensor"),
+        CONF_ID: config[CONF_CHARGER_SENSOR_ID],
         CONF_NAME: "Charger",
         CONF_ICON: "mdi:power-plug",
         CONF_DISABLED_BY_DEFAULT: False,
@@ -161,7 +169,7 @@ async def to_code(config):
 
     ## Sensors
     battery_level_sensor = await sensor.new_sensor({
-        CONF_ID: cv.declare_id(sensor.Sensor)("tesla_battery_level_sensor"),
+        CONF_ID: config[CONF_BATTERY_LEVEL_SENSOR_ID],
         CONF_NAME: "Battery",
         CONF_ICON: "mdi:battery",
         CONF_DISABLED_BY_DEFAULT: False,
@@ -191,7 +199,7 @@ async def to_code(config):
     cg.add(var.set_charge_limit_sensor(charge_limit_sensor))
 
     charger_power_sensor = await sensor.new_sensor({
-        CONF_ID: cv.declare_id(sensor.Sensor)("tesla_charger_power_sensor"),
+        CONF_ID: config[CONF_CHARGER_POWER_SENSOR_ID],
         CONF_NAME: "Charger Power",
         CONF_ICON: "mdi:flash",
         CONF_DEVICE_CLASS: sensor.DEVICE_CLASS_POWER,
@@ -312,7 +320,7 @@ async def to_code(config):
     cg.add(var.set_charging_amps_number(charging_amps_number))
 
     charging_limit_number = await number.new_number({
-        CONF_ID: cv.declare_id(TeslaChargingLimitNumber)("tesla_charging_limit_number"),
+        CONF_ID: config[CONF_CHARGING_LIMIT_NUMBER_ID],
         CONF_NAME: "Charging Limit",
         CONF_ICON: "mdi:battery-charging-100",
         CONF_DISABLED_BY_DEFAULT: False,
@@ -421,5 +429,3 @@ async def tesla_set_charging_limit_to_code(config, action_id, template_arg, args
     template_ = await cg.templatable(config["limit"], args, int)
     cg.add(var.set_limit(template_))
     return var
-
-
