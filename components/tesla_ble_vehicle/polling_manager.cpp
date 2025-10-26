@@ -48,7 +48,6 @@ void PollingManager::update() {
         std::string reason = get_fast_poll_reason();
         log_polling_decision("Infotainment data poll", reason);
         request_infotainment_poll();
-        last_infotainment_poll_ = now;
     }
 }
 
@@ -94,7 +93,6 @@ void PollingManager::update_vehicle_state(bool is_awake, bool is_charging, bool 
             wake_time_ = millis();
             ESP_LOGI(POLLING_MANAGER_TAG, "Vehicle just woke up - tracking wake time and requesting immediate infotainment poll");
             request_infotainment_poll(true);  // true = bypass delay
-            last_infotainment_poll_ = millis();
             // Cancel pending initial infotainment poll since we're doing it now due to wake
             pending_initial_infotainment_poll_ = false;
         }
@@ -118,7 +116,6 @@ void PollingManager::force_immediate_poll() {
     // Force infotainment poll if awake
     if (was_awake_) {
         request_infotainment_poll();
-        last_infotainment_poll_ = now;
     }
 }
 
@@ -128,40 +125,42 @@ bool PollingManager::should_poll_infotainment() {
     // Give a grace period after connection to let VCSEC establish vehicle state first
     uint32_t time_since_connection = time_since(connection_time_);
     if (connection_time_ > 0 && time_since_connection < CONNECTION_GRACE_PERIOD) {
-        ESP_LOGV(POLLING_MANAGER_TAG, "Within connection grace period (%u ms), skipping infotainment poll", time_since_connection);
+        ESP_LOGI(POLLING_MANAGER_TAG, "Within connection grace period (%u ms), skipping infotainment poll", time_since_connection);
         return false;
     }
     
     // Don't poll infotainment if vehicle is asleep
     if (!was_awake_) {
-        ESP_LOGV(POLLING_MANAGER_TAG, "Vehicle asleep, skipping infotainment poll");
+        ESP_LOGI(POLLING_MANAGER_TAG, "Vehicle asleep, skipping infotainment poll");
         return false;
     }
 
     // If charging, always poll at active interval regardless of wake time
     if (was_charging_) {
+        wake_time_ = now; //Reset the wake time to keep infotainment polling going for a while after end charge
         if (has_elapsed(last_infotainment_poll_, infotainment_poll_interval_active_)) {
-            ESP_LOGV(POLLING_MANAGER_TAG, "Vehicle charging, polling at active interval");
+            ESP_LOGI(POLLING_MANAGER_TAG, "Vehicle charging, polling at active interval");
             return true;
         }
+        ESP_LOGI(POLLING_MANAGER_TAG, "Vehicle charging, not polling, active interval not yet reached");
         return false;
     }
 
     // If not charging, check if we're within the wake window
     uint32_t time_since_wake = time_since(wake_time_);
     if (time_since_wake >= infotainment_sleep_timeout_) {
-        ESP_LOGV(POLLING_MANAGER_TAG, "Vehicle awake for %u ms (>%u ms), allowing sleep - skipping infotainment poll", 
+        ESP_LOGI(POLLING_MANAGER_TAG, "Vehicle awake for %u ms (>%u ms), allowing sleep - skipping infotainment poll", 
                  time_since_wake, infotainment_sleep_timeout_);
         return false;
     }
-
+ 
     // We're within the wake window, poll at awake interval
     if (has_elapsed(last_infotainment_poll_, infotainment_poll_interval_awake_)) {
-        ESP_LOGV(POLLING_MANAGER_TAG, "Vehicle awake for %u ms (<%u ms), polling at awake interval", 
+        ESP_LOGI(POLLING_MANAGER_TAG, "Vehicle awake for %u ms (<%u ms), polling at awake interval", 
                  time_since_wake, infotainment_sleep_timeout_);
         return true;
     }
-    
+    ESP_LOGI(POLLING_MANAGER_TAG, "Somehow skipping infotainment poll");
     return false;
 }
 
@@ -234,6 +233,7 @@ void PollingManager::request_infotainment_poll(bool bypass_delay) {
     }
     
     command_manager->enqueue_infotainment_poll();
+    last_infotainment_poll_ = millis();
 }
 
 void PollingManager::request_wake_and_poll() {

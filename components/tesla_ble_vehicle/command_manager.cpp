@@ -408,6 +408,19 @@ void CommandManager::mark_command_failed(const std::string& reason) {
         uint32_t duration = millis() - command.started_at;
         ESP_LOGE(COMMAND_MANAGER_TAG, "[%s] Command failed after %u ms: %s", 
                  command.execute_name.c_str(), duration, reason.c_str());
+        
+        // If a charging command failed, immediately re-publish the real state to HA
+        if (command.domain == UniversalMessage_Domain_DOMAIN_INFOTAINMENT &&
+            (command.execute_name.find("charging") != std::string::npos)) {
+            if (auto* sm = parent_ ? parent_->get_state_manager() : nullptr) {
+                sm->republish_charging_state();
+            }
+            // Also kick a fresh infotainment poll so state catches up quickly
+            if (auto* pm = parent_ ? parent_->get_polling_manager() : nullptr) {
+                pm->force_infotainment_poll();
+            }
+        }
+        
         command_queue_.pop();
     }
 }

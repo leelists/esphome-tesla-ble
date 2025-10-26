@@ -86,6 +86,7 @@ public:
     // Command tracking for INFOTAINMENT request delay
     void track_command_issued();
     bool should_delay_infotainment_request() const;
+    void republish_charging_state(); // publish current is_charging_ to HA
     
 private:
     TeslaBLEVehicle* parent_;
@@ -116,6 +117,7 @@ private:
     bool is_charging_{false};
     bool is_user_present_{false};
     int charging_amps_max_{32};
+    int charger_phases = 1;
     
     // Command delay tracking - prevents stale data from overwriting fresh user commands
     // by delaying INFOTAINMENT requests (polling, force updates, etc.) after commands

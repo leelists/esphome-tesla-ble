@@ -9,6 +9,12 @@ namespace tesla_ble_vehicle {
 
 VehicleStateManager::VehicleStateManager(TeslaBLEVehicle* parent)
     : parent_(parent), is_charging_(false), charging_amps_max_(32) {}
+    
+void VehicleStateManager::republish_charging_state() {
+    if (charging_switch_) {
+        publish_sensor_state(charging_switch_, is_charging_);
+    }
+}
 
 void VehicleStateManager::update_vehicle_status(const VCSEC_VehicleStatus& status) {
     ESP_LOGD(STATE_MANAGER_TAG, "Updating vehicle status");
@@ -122,6 +128,11 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
         float calculated_power_w = 0.0f;
         bool has_calculated_power = false;
         
+        // Try to pick up charger number of phases, default is 1 phase
+        if (charge_state.which_optional_charger_phases) {
+            charger_phases = charge_state.optional_charger_phases.charger_phases;
+        }
+        
         // Try to calculate power from voltage × current for better precision
         if (charge_state.which_optional_charger_voltage && charge_state.which_optional_charger_actual_current) {
             float voltage = static_cast<float>(charge_state.optional_charger_voltage.charger_voltage);
@@ -129,6 +140,9 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
 
             // Calculate power in watts (voltage * current)
             calculated_power_w = (voltage * current);
+            if (charger_phases > 1) {
+               calculated_power_w *= 1.732; 
+            }
             has_calculated_power = true;
 
             ESP_LOGD(STATE_MANAGER_TAG, "Calculated charger power: %.1fV × %.1fA = %.0fW", voltage, current, calculated_power_w);
@@ -186,8 +200,8 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
     }
 
     // Update charging amps (from charger actual current)
-    if (charge_state.which_optional_charger_actual_current && charging_amps_number_) {
-        float amps = static_cast<float>(charge_state.optional_charger_actual_current.charger_actual_current);
+    if (charge_state.which_optional_charge_current_request && charging_amps_number_) {
+        float amps = static_cast<float>(charge_state.optional_charge_current_request.charge_current_request);
         update_charging_amps(amps);
     }
     
@@ -215,11 +229,12 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
         // Skip update if new_max is 0 or invalid - likely not ready or invalid value from vehicle
         if (new_max <= 0) {
             ESP_LOGV(STATE_MANAGER_TAG, "Skipping max charging amps update - invalid value from vehicle: %d A", new_max);
-        } else if (new_max != charging_amps_max_) {
-            update_charging_amps_max(new_max);
-        } else {
-            ESP_LOGV(STATE_MANAGER_TAG, "Max charging amps unchanged: %d A", new_max);
-        }
+        // We don't trust the stored charging_amps_max_
+        } else //if (new_max != charging_amps_max_) {
+            update_charging_amps_max(new_max); // Will be validated by update...()
+        //} else {
+        //    ESP_LOGV(STATE_MANAGER_TAG, "Max charging amps unchanged: %d A", new_max);
+        //}
     } else {
         ESP_LOGV(STATE_MANAGER_TAG, "No max charging amps data in charge state");
     }
@@ -279,8 +294,7 @@ void VehicleStateManager::update_charge_flap_open(bool open) {
 }
 
 void VehicleStateManager::update_charging_amps(float amps) {
-    ESP_LOGV(STATE_MANAGER_TAG, "Charging amps from vehicle: %.1f A", amps);
-    
+    ESP_LOGV(STATE_MANAGER_TAG, "Charging amps setpoint from vehicle: %.1f A", amps);
     // Always update the number component (since we're using delay-based approach)
     publish_sensor_state(charging_amps_number_, amps);
 }
@@ -350,9 +364,11 @@ void VehicleStateManager::update_charging_amps_max(int32_t new_max) {
     charging_amps_max_ = new_max;
     
     // Update the number component's maximum value via the parent (which knows about Tesla types)
-    if (charging_amps_number_ && old_max != new_max) {
-        auto old_trait_max = charging_amps_number_->traits.get_max_value();
-        
+    // We don't trust the old_max value so get it fresh
+    auto old_trait_max = charging_amps_number_->traits.get_max_value();
+    // if (charging_amps_number_ && old_max != new_max) {
+    if (charging_amps_number_ && old_trait_max != new_max) {
+        // auto old_trait_max = charging_amps_number_->traits.get_max_value();
         // Ask the parent to update the max value since it knows about Tesla-specific types
         if (parent_) {
             parent_->update_charging_amps_max_value(new_max);
