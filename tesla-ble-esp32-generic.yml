@@ -78,10 +78,22 @@ text_sensor:
             then:
               - switch.turn_on: ble_connection_switch
             else:
+              - delay: 30s
               - lambda: |-
                   id(tesla_ble_vehicle_id).set_charging_state(false);
-                  id(tesla_ble_vehicle_id).set_charging_amps(${charging_limit_solar_max});
-
+                  id(tesla_ble_vehicle_id).set_charging_amps(${charging_amps_max});
+              - wait_until:
+                  condition:
+                    lambda: |-
+                      auto *manager = id(tesla_ble_vehicle_id).get_state_manager();
+                      if (manager != nullptr) {
+                        const float amps = manager->get_charging_amps();
+                        if (!isnan(amps)) {
+                          return amps == ${charging_amps_max};
+                        }
+                      }
+                      return false;
+                  timeout: 180s
               - delay: 60s
               - switch.turn_off: ble_connection_switch
 
